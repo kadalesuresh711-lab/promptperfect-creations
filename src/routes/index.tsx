@@ -843,10 +843,28 @@ function Index() {
         }
       };
 
-      await Promise.all([
-        promptStage,
-        ...Array.from({ length: IMAGE_CONCURRENCY }, () => worker()),
-      ]);
+      // Order is strict: EVERY line's prompt is written (including the repair
+      // sweep) before a single picture is requested. Drawing used to run at the
+      // same time as writing, so panels whose prompt had not been written yet
+      // were sent to the renderer and came back failed.
+      await promptStage;
+      promptingDone = true;
+
+      // Rebuild the render queue from the finished prompts so each timestamp is
+      // queued exactly once, then start drawing immediately — no extra waiting.
+      queue.length = 0;
+      for (const s of list) {
+        if (hasPrompt(s.prompt) && !s.url) {
+          queue.push({ seg: s, prompt: (s.prompt as string).trim(), attempts: 0 });
+        }
+      }
+      console.log(`[client] prompts complete · starting image stage with ${queue.length} panels`);
+      tick(true);
+
+      if (!cancelRef.current && queue.length > 0) {
+        await Promise.all(Array.from({ length: IMAGE_CONCURRENCY }, () => worker()));
+      }
+
 
       // A superseded run never marks the page complete.
       if (!isCurrentRun()) return;
