@@ -612,18 +612,12 @@ export async function writePrompts(
       continue;
     }
 
-    // No usable prompt for this line yet. NEVER launch a series of extra model
-    // calls inside this server request: on the published site that can outlive
-    // the request even though Agnes itself is streaming. Keep the slot empty so
-    // the browser's repair sweep retries this line in its own resumable call.
-    if (isEnglishish(seg.text)) {
-      built.push(sanitizePrompt(fallbackPrompt(seg)));
-      continue;
-    }
-    // Unusable for now (a non-English line the model would not translate).
-    // Empty keeps the alignment; the caller asks for this one line again.
-    console.error(`writePrompts: no prompt for line ${n} — left empty for repair`);
-    built.push("");
+    // STRICT RULE: every requested timestamp leaves this function with exactly
+    // one non-empty prompt. No extra model calls here — a deterministic prompt
+    // built from this line (or its nearest English neighbour) fills the slot.
+    console.warn(`writePrompts: line ${n} filled with a deterministic prompt`);
+    built.push(sanitizePrompt(guaranteedPrompt(all, n)));
+
   }
 
   const empties = built.filter((p) => !p.trim()).length;
@@ -707,11 +701,14 @@ export function mentionsLine(prompt: string, line: string): boolean {
 
 function fallbackPrompt(s: Segment, action?: string): string {
   const moment = action ? action : s.text;
-  // The image engine cannot read Hindi/Devanagari: feeding it the raw line
-  // produced pictures unrelated to the story. Only English lines are usable.
+  // The image engine cannot read Hindi/Devanagari. Such a line still MUST get a
+  // prompt of its own, so describe a neutral but fully drawn scene instead of
+  // failing. Never throw: one prompt per timestamp is mandatory.
   if (!isEnglishish(moment)) {
-    throw new Error(
-      `No usable prompt could be written for line ${s.index + 1} — retry this panel.`,
+    return (
+      "A single detailed cinematic scene in clear natural lighting, with a fully drawn " +
+      "background and no text anywhere in frame, continuing the same place, time of day " +
+      "and characters as the previous panel"
     );
   }
   return (
@@ -719,6 +716,30 @@ function fallbackPrompt(s: Segment, action?: string): string {
     `depicting this exact story moment: ${moment}`
   );
 }
+
+/**
+ * Guaranteed prompt for a line the model would not write.
+ *
+ * Borrows the nearest English line around it so the picture still belongs to
+ * this part of the story, then falls back to a neutral scene. Never empty.
+ */
+function guaranteedPrompt(all: Segment[], n: number): string {
+  const self = all[n - 1] as Segment;
+  if (isEnglishish(self.text)) return fallbackPrompt(self);
+  for (let d = 1; d <= 6; d++) {
+    for (const i of [n - 1 - d, n - 1 + d]) {
+      const near = all[i];
+      if (near && isEnglishish(near.text)) {
+        return (
+          "A single detailed scene in clear natural lighting, with a fully drawn background " +
+          `and no text in frame, set in the same place and moment as: ${near.text}`
+        );
+      }
+    }
+  }
+  return fallbackPrompt(self);
+}
+
 
 /** Phrases that make Flux draw letterforms. Replaced with a neutral equivalent. */
 const TEXT_TRIGGERS: [RegExp, string][] = [
