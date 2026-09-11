@@ -378,8 +378,12 @@ export async function writePrompts(
   all: Segment[],
   from: number,
   to: number,
+  requested?: number[],
 ): Promise<string[]> {
-  const count = to - from + 1;
+  const wanted = requested?.length
+    ? [...new Set(requested)].filter((n) => n >= from && n <= to).sort((a, b) => a - b)
+    : Array.from({ length: to - from + 1 }, (_, i) => from + i);
+  const count = wanted.length;
   if (count <= 0) return [];
 
   const full = numberScript(all);
@@ -427,7 +431,6 @@ export async function writePrompts(
   };
 
 
-  const wanted = Array.from({ length: count }, (_, i) => from + i);
   const byNumber = new Map<number, string>();
 
   const absorb = (raw: string, want: number[]) => {

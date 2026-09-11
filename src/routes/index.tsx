@@ -177,6 +177,7 @@ type PromptRequest = {
   bible: string;
   from: number;
   to: number;
+  lines?: number[];
   segments: Segment[];
 };
 
@@ -571,6 +572,7 @@ function Index() {
         if (!isCurrentRun()) return;
         if (!force && now - lastTick < 300) return;
         lastTick = now;
+        promptDone = list.filter((s) => hasPrompt(s.prompt)).length;
         setNote(`Prompts ${promptDone}/${total} · panels ${drawn}/${total}`);
       };
       tick(true);
@@ -653,9 +655,10 @@ function Index() {
           await checkpoint();
         }
 
-        // Repair sweep: one timestamp = one image, in any condition. Any line
-        // that still has no prompt (model skipped it, or the pass failed) is
-        // asked for again in small groups until every line has one.
+        // Repair sweep: send missing timestamps together while preserving each
+        // requested line number. The previous one-request-per-line loop could
+        // take many minutes after the UI had misleadingly shown all prompts as
+        // complete, preventing the image stage from ever starting.
         for (let round = 0; round < 5; round++) {
           if (cancelRef.current) break;
           const missing = list.filter((s) => !hasPrompt(s.prompt));
@@ -663,24 +666,35 @@ function Index() {
             `[client] repair round ${round + 1}: ${missing.length} lines still without a prompt`,
           );
           if (missing.length === 0) break;
-          // One line per request: a mixed, non-contiguous group is exactly how a
-          // prompt written for another timestamp landed on this panel.
-          for (const s of missing) {
+          for (let offset = 0; offset < missing.length; offset += PROMPT_RANGE) {
             if (cancelRef.current) break;
-            const num = s.index + 1;
-            record(s.index, { status: "prompting", error: undefined });
+            const group = missing.slice(offset, offset + PROMPT_RANGE);
+            const lines = group.map((s) => s.index + 1);
+            const first = lines[0];
+            const last = lines[lines.length - 1];
+            if (first === undefined || last === undefined) continue;
+            group.forEach((s) => record(s.index, { status: "prompting", error: undefined }));
             try {
-              const res = await getPrompts({ bible: b, from: num, to: num, segments: allSegments });
-              const slot = (res.prompts as string[])[0];
-              if (hasPrompt(slot)) {
-                const prompt = (slot as string).trim();
-                record(s.index, { prompt, status: "waiting", error: undefined });
-                queue.push({ seg: s as Shot, prompt, attempts: 0 });
-              } else {
+              const res = await getPrompts({
+                bible: b,
+                from: first,
+                to: last,
+                lines,
+                segments: allSegments,
+              });
+              group.forEach((s, index) => {
+                const slot = (res.prompts as string[])[index];
+                if (hasPrompt(slot)) {
+                  const prompt = (slot as string).trim();
+                  record(s.index, { prompt, status: "waiting", error: undefined });
+                  return;
+                }
                 record(s.index, { prompt: undefined, status: "error", error: "prompt missing" });
-              }
+              });
             } catch {
-              record(s.index, { prompt: undefined, status: "error", error: "prompt missing" });
+              group.forEach((s) =>
+                record(s.index, { prompt: undefined, status: "error", error: "prompt missing" }),
+              );
             }
             tick();
             await checkpoint();

@@ -8,6 +8,7 @@ const Input = z
     bible: z.string().max(10_000),
     from: z.number().int().min(1),
     to: z.number().int().min(1),
+    lines: z.array(z.number().int().min(1)).min(1).max(120).optional(),
     segments: z
       .array(
         z.object({
@@ -21,9 +22,16 @@ const Input = z
       .max(10_000),
     runAt: z.number().optional(),
   })
-  .refine((value) => value.to >= value.from && value.to - value.from < 120, {
+  .refine(
+    (value) =>
+      value.to >= value.from &&
+      (value.lines
+        ? value.lines.every((line) => line >= value.from && line <= value.to)
+        : value.to - value.from < 120),
+    {
     message: "Prompt range must contain 1 to 120 lines",
-  });
+    },
+  );
 
 export const Route = createFileRoute("/api/prompts")({
   server: {
@@ -76,7 +84,7 @@ export const Route = createFileRoute("/api/prompts")({
 
             void withRun(
               input.runAt,
-              () => writePrompts(input.bible, input.segments, input.from, input.to),
+              () => writePrompts(input.bible, input.segments, input.from, input.to, input.lines),
               // The browser dropping this request (Insta Kill, refresh, closed
               // tab) aborts the upstream work at once, freeing the key.
               request.signal,
