@@ -211,10 +211,12 @@ const PROMPT_SYSTEM =
   "character bible and the COMPLETE script (Hindi/Hinglish/English), every line numbered with its timestamp. You are " +
   "then asked for a set of line numbers. For EACH requested number write ONE English image prompt that draws EXACTLY " +
   "WHAT THAT LINE LITERALLY DESCRIBES.\n" +
-  "TIMESTAMP FIDELITY (absolute): the prompt for a numbered line must show ONLY that line's own moment, place and " +
-  "action. Never draw a different timestamp's scene, never blend two timestamps into one image, and never repeat the " +
-  "previous or next line's scene. Before writing each prompt, re-read THAT line and take its setting, people and " +
-  "action from its own words.\n" +
+  "TIMESTAMP FIDELITY (absolute): the prompt for a numbered line must show THAT line's own moment and action. Never " +
+  "draw a different timestamp or blend two timestamps into one image. Story continuity is equally absolute: unless " +
+  "that line explicitly changes place, time or cast, retain the established location, time of day and active characters " +
+  "from the immediately preceding lines. A new sentence is not a new scene. Resolve Hindi/Hinglish pronouns such as " +
+  "वह, उसके, उसकी, उसे, उन्होंने and English he/she/they from the surrounding lines and write the resolved character's " +
+  "NAME in the prompt. Never replace an active character with an empty room or landscape.\n" +
   "EVERY prompt must contain, in this order: (1) the place/setting the line itself describes, (2) who or what is in " +
   "frame — with bible traits woven inline ONLY for characters the line itself is about; if the line involves no person, " +
   "the shot has no people at all, (3) the exact action, body pose and facial expression, (4) 4-6 concrete environmental " +
@@ -228,11 +230,15 @@ const PROMPT_SYSTEM =
   "war, a crowd or a phenomenon, then the image IS that thing, shown in ITS OWN place and time — demons attacking " +
   "Busan becomes demons attacking Busan; soldiers mobilising becomes soldiers mobilising. Never fall back on the " +
   "main characters standing somewhere just because the previous line was there.\n" +
-  "- FREE MOVEMENT IN PLACE AND TIME: consecutive lines may jump to a completely different location, era or set of " +
-  "people, and that is expected. Take the setting from the line's own words (plus nearby lines only when the line " +
-  "itself is ambiguous). There is no requirement to stay in the previous panel's location.\n" +
-  "- CAST BY NAME ONLY: put a bible character in a panel only when that line is actually about them (named, or an " +
-  "unmistakable pronoun continuing their own action from the line right before). Lines about soldiers, demons, " +
+  "- SCENE CONTINUITY: default to the same location, time and active cast as the previous line. Change them ONLY when " +
+  "the current line explicitly names a different location/time/cast or clearly begins a flashback, memory, dream or " +
+  "separate narrated event. Keep continuing actions spatially coherent: the same room layout, doors, furniture and " +
+  "character positions should remain recognisable while pose, expression and camera angle advance.\n" +
+  "crowds, villagers, strangers or unnamed people show THOSE people — never insert a main character into them.\n" +
+  "- CAST RESOLUTION: put every bible character named in the current line in frame. Also retain a bible character when " +
+  "the current line uses a pronoun or continues that character's action from the preceding line. Write every resolved " +
+  "character by NAME and repeat their sheet traits. Lines explicitly about soldiers, demons, crowds, villagers, " +
+  "strangers or unnamed people show those people instead of unrelated main characters.\n" +
   "crowds, villagers, strangers or unnamed people show THOSE people — never insert a main character into them.\n" +
   "- A memory, flashback, dream or story-within-the-story is drawn as the remembered event itself, in the place and " +
   "time it happened, not as someone remembering it.\n" +
@@ -397,14 +403,24 @@ export async function writePrompts(
       .map((n) => {
         const s = all[n - 1] as Segment;
         const base = `${n}. [${s.start}s-${s.end}s] ${s.text}`;
-        if (!isShortLine(s.text)) return base;
-        // A near-empty line carries no setting of its own. Hand the model the
-        // nearest substantial neighbour so the panel stays in the same scene
-        // instead of being invented from nothing.
-        const anchor = nearestSubstantialLine(all, n);
-        return anchor
-          ? `${base}\n   CONTEXT (this line is very short — keep this same place, people and time, change only the camera/expression): ${anchor}`
-          : base;
+        const before = all[n - 2]?.text?.trim();
+        const after = all[n]?.text?.trim();
+        const neighbours = [
+          before ? `PREVIOUS: ${before.slice(0, 500)}` : "",
+          after ? `NEXT: ${after.slice(0, 500)}` : "",
+        ].filter(Boolean);
+        const shortAnchor = isShortLine(s.text) ? nearestSubstantialLine(all, n) : null;
+        return [
+          base,
+          neighbours.length
+            ? `   CONTINUITY CONTEXT (resolve place, cast and pronouns; do not draw this context's action): ${neighbours.join(" | ")}`
+            : "",
+          shortAnchor
+            ? `   SHORT-LINE ANCHOR (hold this scene and change only action/expression/camera): ${shortAnchor}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n");
       })
       .join("\n");
 
@@ -616,7 +632,7 @@ export async function writePrompts(
     // one non-empty prompt. No extra model calls here — a deterministic prompt
     // built from this line (or its nearest English neighbour) fills the slot.
     console.warn(`writePrompts: line ${n} filled with a deterministic prompt`);
-    built.push(sanitizePrompt(guaranteedPrompt(all, n)));
+    built.push(sanitizePrompt(guaranteedPrompt(all, n, bible, byNumber)));
 
   }
 
@@ -701,14 +717,13 @@ export function mentionsLine(prompt: string, line: string): boolean {
 
 function fallbackPrompt(s: Segment, action?: string): string {
   const moment = action ? action : s.text;
-  // The image engine cannot read Hindi/Devanagari. Such a line still MUST get a
-  // prompt of its own, so describe a neutral but fully drawn scene instead of
-  // failing. Never throw: one prompt per timestamp is mandatory.
+  // A non-English line still MUST get a timestamp-specific prompt. This branch
+  // is enriched with an adjacent written prompt by guaranteedPrompt below.
   if (!isEnglishish(moment)) {
     return (
-      "A single detailed cinematic scene in clear natural lighting, with a fully drawn " +
-      "background and no text anywhere in frame, continuing the same place, time of day " +
-      "and characters as the previous panel"
+      "Continue the established scene at this exact next story beat, retaining the same location, " +
+      "time of day, room layout and active characters; advance their visible action, pose and expression, " +
+      "with a different camera angle and no text anywhere in frame"
     );
   }
   return (
@@ -723,9 +738,30 @@ function fallbackPrompt(s: Segment, action?: string): string {
  * Borrows the nearest English line around it so the picture still belongs to
  * this part of the story, then falls back to a neutral scene. Never empty.
  */
-function guaranteedPrompt(all: Segment[], n: number): string {
+function guaranteedPrompt(
+  all: Segment[],
+  n: number,
+  bible: string,
+  written: Map<number, string>,
+): string {
   const self = all[n - 1] as Segment;
   if (isEnglishish(self.text)) return fallbackPrompt(self);
+  const named = namedBibleEntries(self.text, bible);
+  const cast = named.length
+    ? ` The current line explicitly includes ${named.map((e) => `${e.name}: ${e.traits}`).join("; ")}. Show them in frame.`
+    : "";
+  for (let d = 1; d <= 6; d++) {
+    for (const neighbour of [n - d, n + d]) {
+      const existing = written.get(neighbour);
+      if (existing) {
+        return (
+          `Continue the established story scene from this nearby timestamp: ${clip(existing, 520)}. ` +
+          `This is timestamp ${n}, a distinct next beat: preserve the location, time, set details and continuing cast, ` +
+          `but advance the visible action, pose, expression and camera composition.${cast}`
+        );
+      }
+    }
+  }
   for (let d = 1; d <= 6; d++) {
     for (const i of [n - 1 - d, n - 1 + d]) {
       const near = all[i];
@@ -919,6 +955,30 @@ export function parseBible(bible: string): { name: string; traits: string }[] {
     })
     .filter((v): v is { name: string; traits: string } => v !== null)
     .slice(0, 12);
+}
+
+/** Characters explicitly named in script text or a written prompt. */
+function namedBibleEntries(text: string, bible?: string): { name: string; traits: string }[] {
+  if (!bible) return [];
+  const folded = text.toLocaleLowerCase();
+  return parseBible(bible).filter((entry) => folded.includes(entry.name.toLocaleLowerCase()));
+}
+
+/**
+ * A pasted character sheet is authoritative. If the current timestamp names a
+ * character but the writing model omitted that name, prepend the fixed identity
+ * and require the character on screen before the short image encoder can miss it.
+ */
+function enforceLineCast(prompt: string, line?: string, bible?: string): string {
+  if (!line || !bible) return prompt;
+  const named = namedBibleEntries(line, bible);
+  if (named.length === 0) return prompt;
+  const absent = named.filter(
+    (entry) => !prompt.toLocaleLowerCase().includes(entry.name.toLocaleLowerCase()),
+  );
+  if (absent.length === 0) return prompt;
+  const cast = absent.map((entry) => `${entry.name}: ${entry.traits}`).join("; ");
+  return `Required on-screen cast for this timestamp: ${cast}. ${prompt}`;
 }
 
 /** Reads an explicit gender out of a bible line's traits. */
@@ -1140,8 +1200,9 @@ const STYLE_TAIL =
   "polished 2D Japanese anime animation frame, crisp uniform ink outlines, flat cel colour fills, " +
   "hand-painted anime background, fully finished artwork drawn edge to edge";
 
-export function composeImagePrompt(prompt: string, bible?: string): string {
-  const fixed = enforceGender(sanitizePrompt(prompt), bible);
+export function composeImagePrompt(prompt: string, bible?: string, line?: string): string {
+  const withCast = enforceLineCast(prompt, line, bible);
+  const fixed = enforceGender(sanitizePrompt(withCast), bible);
   const peopled = hasPeople(fixed, bible);
   // Character lock only matters when someone is actually in frame.
   const lock = peopled ? clip(characterLock(fixed, bible), LOCK_BUDGET) : "";
@@ -1215,8 +1276,7 @@ export async function generateImage(
   attempts = 6,
   line?: string,
 ): Promise<string> {
-  const body = composeImagePrompt(prompt, bible).slice(0, 2000);
-  void line;
+  const body = composeImagePrompt(prompt, bible, line).slice(0, 2000);
 
   let lastErr = "";
   for (let attempt = 0; attempt < Math.max(1, attempts); attempt++) {
