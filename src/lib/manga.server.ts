@@ -624,7 +624,7 @@ export async function writePrompts(
     if (own && isEnglishish(seg.text) && !mentionsLine(own, seg.text)) {
       byNumber.delete(n);
     } else if (own) {
-      built.push(sanitizePrompt(own));
+      built.push(sanitizePrompt(enforceTimestampCast(own, all, n, bible)));
       continue;
     }
 
@@ -632,7 +632,9 @@ export async function writePrompts(
     // one non-empty prompt. No extra model calls here — a deterministic prompt
     // built from this line (or its nearest English neighbour) fills the slot.
     console.warn(`writePrompts: line ${n} filled with a deterministic prompt`);
-    built.push(sanitizePrompt(guaranteedPrompt(all, n, bible, byNumber)));
+    built.push(
+      sanitizePrompt(enforceTimestampCast(guaranteedPrompt(all, n, bible, byNumber), all, n, bible)),
+    );
 
   }
 
@@ -951,6 +953,7 @@ export function parseBible(bible: string): { name: string; traits: string }[] {
       const name = l.slice(0, i).trim();
       const traits = l.slice(i + 1).trim();
       if (!name || name.length > 40 || !traits) return null;
+      if (/^(?:place|location|setting)\s*-/i.test(name)) return null;
       return { name, traits };
     })
     .filter((v): v is { name: string; traits: string } => v !== null)
@@ -962,6 +965,47 @@ function namedBibleEntries(text: string, bible?: string): { name: string; traits
   if (!bible) return [];
   const folded = text.toLocaleLowerCase();
   return parseBible(bible).filter((entry) => folded.includes(entry.name.toLocaleLowerCase()));
+}
+
+/** True when a line continues a previously established person's action. */
+function hasPersonReference(text: string): boolean {
+  return /\b(he|she|him|her|his|hers|they|them|their)\b|(?:वह|वो|उसने|उसका|उसकी|उसके|उसे|उन्होंने|उनका|उनकी|उनके|वे|उस|अपने|अपनी|अपना)/iu.test(
+    text,
+  );
+}
+
+/**
+ * Deterministic timestamp cast repair. It handles the common Hindi/Hinglish
+ * pattern where a character is named once and subsequent timestamps use only a
+ * pronoun. The nearest recently named sheet character is carried forward only
+ * for a person-referencing line, preventing unrelated narration from inheriting
+ * the cast.
+ */
+function enforceTimestampCast(
+  prompt: string,
+  all: Segment[],
+  n: number,
+  bible?: string,
+): string {
+  if (!bible) return prompt;
+  const current = all[n - 1];
+  if (!current) return prompt;
+  let required = namedBibleEntries(current.text, bible);
+  if (required.length === 0 && hasPersonReference(current.text)) {
+    for (let i = n - 2; i >= 0 && i >= n - 10; i--) {
+      required = namedBibleEntries(all[i]?.text ?? "", bible);
+      if (required.length > 0) break;
+    }
+  }
+  if (required.length === 0) return prompt;
+  const p = prompt.toLocaleLowerCase();
+  const absent = required.filter((entry) => !p.includes(entry.name.toLocaleLowerCase()));
+  if (absent.length === 0) return prompt;
+  return (
+    `Required continuing cast in frame: ${absent
+      .map((entry) => `${entry.name}: ${entry.traits}`)
+      .join("; ")}. ` + prompt
+  );
 }
 
 /**
