@@ -252,6 +252,12 @@ const PROMPT_SYSTEM =
   "NEVER write a separate character description block, sheet, reference, lineup or 'plus portrait of'.\n" +
   "- CONSISTENCY: when a bible character DOES appear, repeat their bible traits (hair, eyes, clothing colours) using " +
   "the bible's own words. Never redesign, re-age or re-dress a character between shots.\n" +
+  "- THE CHARACTER BIBLE IS APPEARANCE REFERENCE ONLY. Never turn its wording into the panel's action, setting or " +
+  "composition. The timestamped script alone decides what happens. First describe the exact visible story action and " +
+  "location; attach fixed appearance traits only to the people actually present.\n" +
+  "- NEVER SUBSTITUTE SCENERY FOR A HUMAN MOMENT: if a line names, quotes, remembers, describes, follows or uses a " +
+  "pronoun for a person, that person must be visibly present performing the line's action. An empty room, empty road, " +
+  "empty field or landscape is valid only when the line explicitly establishes an unoccupied place.\n" +
   "- GENDER ACCURACY (critical): every bible character is written with their name AND their exact gender using an " +
   "explicit gendered noun. Never swap or reverse a character's gender. For side characters, pick one gender from the " +
   "script context and state it explicitly, and keep it identical everywhere in the story.\n" +
@@ -1001,17 +1007,16 @@ function enforceTimestampCast(
   const p = prompt.toLocaleLowerCase();
   const absent = required.filter((entry) => !p.includes(entry.name.toLocaleLowerCase()));
   if (absent.length === 0) return prompt;
-  return (
-    `Required continuing cast in frame: ${absent
-      .map((entry) => `${entry.name}: ${entry.traits}`)
-      .join("; ")}. ` + prompt
-  );
+  return `${prompt}. Required continuing cast visibly in frame: ${absent
+    .map((entry) => entry.name)
+    .join(", ")}.`;
 }
 
 /**
  * A pasted character sheet is authoritative. If the current timestamp names a
- * character but the writing model omitted that name, prepend the fixed identity
- * and require the character on screen before the short image encoder can miss it.
+ * character but the writing model omitted that name, require the character
+ * after the scene action. Full traits are appended later by characterLock; they
+ * must not displace the timestamp action from the image encoder's short window.
  */
 function enforceLineCast(prompt: string, line?: string, bible?: string): string {
   if (!line || !bible) return prompt;
@@ -1021,8 +1026,8 @@ function enforceLineCast(prompt: string, line?: string, bible?: string): string 
     (entry) => !prompt.toLocaleLowerCase().includes(entry.name.toLocaleLowerCase()),
   );
   if (absent.length === 0) return prompt;
-  const cast = absent.map((entry) => `${entry.name}: ${entry.traits}`).join("; ");
-  return `Required on-screen cast for this timestamp: ${cast}. ${prompt}`;
+  const cast = absent.map((entry) => entry.name).join(", ");
+  return `${prompt}. Required on-screen cast for this timestamp: ${cast}.`;
 }
 
 /** Reads an explicit gender out of a bible line's traits. */
