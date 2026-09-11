@@ -648,23 +648,162 @@ export async function writePrompts(
   console.log(
     `[prompts] DONE lines ${from}-${to} in ${Date.now() - t0}ms: ${built.length - empties}/${count} written, ${empties} empty`,
   );
-  return chainContinuity(built);
+  return chainContinuity(built, all, wanted);
 }
 
+
+/** Locations the image engine can actually stage, as written in prompts. */
+const SETTING_WORDS: string[] = [
+  "bedroom",
+  "kitchen",
+  "bathroom",
+  "living room",
+  "drawing room",
+  "hallway",
+  "corridor",
+  "staircase",
+  "rooftop",
+  "terrace",
+  "balcony",
+  "courtyard",
+  "veranda",
+  "room",
+  "house",
+  "home",
+  "hut",
+  "mansion",
+  "haveli",
+  "temple",
+  "shrine",
+  "church",
+  "mosque",
+  "school",
+  "classroom",
+  "college",
+  "office",
+  "hospital",
+  "clinic",
+  "police station",
+  "prison",
+  "cell",
+  "shop",
+  "market",
+  "bazaar",
+  "restaurant",
+  "cafe",
+  "hotel",
+  "street",
+  "road",
+  "alley",
+  "village",
+  "town",
+  "city",
+  "railway station",
+  "bus stop",
+  "airport",
+  "train",
+  "bus",
+  "car",
+  "jungle",
+  "forest",
+  "woods",
+  "field",
+  "farm",
+  "garden",
+  "park",
+  "mountain",
+  "valley",
+  "hill",
+  "cave",
+  "desert",
+  "river",
+  "riverbank",
+  "lake",
+  "beach",
+  "sea",
+  "boat",
+  "graveyard",
+  "cremation ground",
+  "ruins",
+  "factory",
+  "warehouse",
+  "workshop",
+  "well",
+];
+
+/** The first staged location named in a written prompt, or null. */
+function detectSetting(prompt: string): string | null {
+  const p = prompt.toLowerCase();
+  let best: { word: string; at: number } | null = null;
+  for (const word of SETTING_WORDS) {
+    const at = p.indexOf(word);
+    if (at === -1) continue;
+    if (!best || at < best.at || (at === best.at && word.length > best.word.length)) {
+      best = { word, at };
+    }
+  }
+  return best ? best.word : null;
+}
+
+/** Hindi / romanised place words that mark a genuine change of location. */
+const PLACE_CUES: RegExp = new RegExp(
+  [
+    "घर", "कमरे?", "कमरा", "रसोई", "आँगन|आंगन", "छत", "बरामदा", "जंगल", "सड़क", "गली",
+    "बाज़ार|बाजार", "दुकान", "स्कूल", "कॉलेज", "दफ़्तर|दफ्तर", "अस्पताल", "थाना", "जेल",
+    "मंदिर", "मस्जिद", "गिरजा", "गाँव|गांव", "शहर", "खेत", "बग़ीचा|बगीचा", "पहाड़", "नदी",
+    "तालाब", "समुंदर|समुद्र", "गुफ़ा|गुफा", "श्मशान", "कुआँ|कुआं", "स्टेशन", "ट्रेन", "बस",
+    "गाड़ी", "कार", "होटल", "छत पर",
+    "ghar", "kamra", "kamre", "rasoi", "aangan", "chhat", "jungle", "sadak", "gali",
+    "bazaar", "dukan", "school", "college", "office", "hospital", "thana", "jail",
+    "mandir", "masjid", "gaon", "gaanv", "shehar", "khet", "bagicha", "pahad", "nadi",
+    "talab", "samundar", "gufa", "shamshan", "kuan", "station", "train", "bus",
+    "gaadi", "car", "hotel",
+  ].join("|"),
+  "i",
+);
 
 /**
- * Panel-to-panel continuity.
+ * Panel-to-panel setting continuity.
  *
- * The old version appended "same place, same time of day, same characters as the
- * previous illustration" to EVERY panel. On a narrator-heavy script that forced
- * every line — demons in Busan, an army mobilising, backstory from another era —
- * to be redrawn as the previous panel's couple standing in the previous
- * panel's room. Each panel now stands on its own; the renderer applies the
- * shared art style only after these content prompts are written.
+ * The writing model often re-imagines the backdrop for narration lines that do
+ * not restate where the scene is, which made consecutive panels jump house →
+ * jungle → house. A panel may only move to a new location when its OWN script
+ * line names a place (or the prompt is the first of the run). Otherwise the
+ * established location is restated in the prompt so the picture stays in it.
  */
-export function chainContinuity(prompts: string[]): string[] {
-  return prompts;
+export function chainContinuity(
+  prompts: string[],
+  all?: Segment[],
+  wanted?: number[],
+): string[] {
+  if (!all || !wanted || wanted.length !== prompts.length) return prompts;
+  let active: string | null = null;
+  return prompts.map((prompt, i) => {
+    if (!prompt.trim()) return prompt;
+    const line = all[(wanted[i] as number) - 1]?.text ?? "";
+    const here = detectSetting(prompt);
+    const declaresPlace = PLACE_CUES.test(line);
+    if (!active) {
+      active = here;
+      return prompt;
+    }
+    if (declaresPlace) {
+      // The line itself moves the story; trust the written setting.
+      if (here) active = here;
+      return prompt;
+    }
+    if (here && here === active) return prompt;
+    const fixed = here
+      ? prompt.replace(new RegExp(here.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), active)
+      : prompt;
+    return (
+      `${fixed}. Setting continuity: this beat happens in the very same ${active} as the ` +
+      `previous panel, with the same walls, furniture, props and time of day; do not move the ` +
+      `story to a different place — only the characters' action, pose and camera angle change`
+    );
+  });
 }
+
 
 /** True when a string is mostly Latin-script text the image engine can read. */
 export function isEnglishish(s: string): boolean {
