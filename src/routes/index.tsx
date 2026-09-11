@@ -700,6 +700,26 @@ function Index() {
             await checkpoint();
           }
         }
+
+        // STRICT GUARANTEE: one prompt per timestamp, always. Anything the model
+        // still refused after every repair round gets a deterministic prompt so
+        // no timestamp is ever skipped and no panel is left unwritten.
+        for (const s of list) {
+          if (hasPrompt(s.prompt)) continue;
+          const near =
+            list.find((o) => o.index === s.index - 1 && hasPrompt(o.prompt))?.prompt ??
+            list.find((o) => o.index === s.index + 1 && hasPrompt(o.prompt))?.prompt;
+          const prompt = near
+            ? (near as string).trim()
+            : "A single detailed cinematic scene in clear natural lighting, with a fully " +
+              "drawn background and no text anywhere in frame, continuing the same place, " +
+              `time of day and characters: ${s.text}`;
+          console.warn(`[client] line ${s.index + 1}: filled with a deterministic prompt`);
+          record(s.index, { prompt, status: "waiting", error: undefined });
+        }
+        promptDone = list.length;
+        tick(true);
+
       })()
         .catch((e) => {
           console.error("[client] prompt stage crashed:", e);
