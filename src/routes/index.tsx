@@ -706,14 +706,12 @@ function Index() {
         // no timestamp is ever skipped and no panel is left unwritten.
         for (const s of list) {
           if (hasPrompt(s.prompt)) continue;
-          const near =
-            list.find((o) => o.index === s.index - 1 && hasPrompt(o.prompt))?.prompt ??
-            list.find((o) => o.index === s.index + 1 && hasPrompt(o.prompt))?.prompt;
-          const prompt = near
-            ? (near as string).trim()
-            : "A single detailed cinematic scene in clear natural lighting, with a fully " +
-              "drawn background and no text anywhere in frame, continuing the same place, " +
-              `time of day and characters: ${s.text}`;
+          const before = list.find((o) => o.index === s.index - 1 && hasPrompt(o.prompt))?.prompt;
+          const prompt =
+            "Continue the established story scene at this exact next timestamp. Preserve the " +
+            "location, time of day, set layout and active characters, but show a distinct next " +
+            `action, pose, expression and camera angle for this script line: ${s.text}. ` +
+            (before ? `Previous scene continuity: ${(before as string).slice(0, 500)}` : "");
           console.warn(`[client] line ${s.index + 1}: filled with a deterministic prompt`);
           record(s.index, { prompt, status: "waiting", error: undefined });
         }
