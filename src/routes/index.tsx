@@ -949,10 +949,17 @@ function Index() {
       if (!prompt) {
         record(shot.index, { status: "prompting", error: undefined });
         try {
+          // A retry must be written with the SAME neighbourhood the first pass
+          // had: asking for one lonely line lets the writer re-invent the place
+          // (house → jungle → house). The three preceding timestamps are
+          // rewritten with it so scene continuity is established, and only the
+          // target panel's prompt is taken from the answer.
+          const line = shot.index + 1;
+          const from = Math.max(1, line - 3);
           const { prompts } = await getPrompts({
             bible,
-            from: shot.index + 1,
-            to: shot.index + 1,
+            from,
+            to: line,
             segments: shotsRef.current.map((s) => ({
               index: s.index,
               start: s.start,
@@ -960,7 +967,7 @@ function Index() {
               text: s.text,
             })),
           });
-          const slot = prompts[0] as string | undefined;
+          const slot = prompts[line - from] as string | undefined;
           prompt = hasPrompt(slot) ? (slot as string).trim() : undefined;
         } catch {
           prompt = undefined;
